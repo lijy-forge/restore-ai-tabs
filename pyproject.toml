@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "restore-ai-tabs"
+version = "0.4.0"
+description = "Restore your Claude Code & Codex sessions as terminal tabs after a crash (iTerm2 / Windows Terminal)"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+keywords = ["claude-code", "codex", "iterm2", "windows-terminal", "session-restore"]
+classifiers = [
+  "Environment :: Console :: Curses",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+]
+dependencies = ['windows-curses; sys_platform == "win32"']
+
+[project.urls]
+Homepage = "https://github.com/lijy-forge/restore-ai-tabs"
+
+[project.scripts]
+restore-ai-tabs = "restore_ai_tabs:main"
+
+[tool.setuptools]
+py-modules = ["restore_ai_tabs"]
