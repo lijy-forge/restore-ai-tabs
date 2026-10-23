@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "restore-ai-tabs"
-version = "0.4.0"
+version = "0.5.0"
 description = "Restore your Claude Code & Codex sessions as terminal tabs after a crash (iTerm2 / Windows Terminal)"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -26,4 +26,4 @@ Homepage = "https://github.com/lijy-forge/restore-ai-tabs"
 restore-ai-tabs = "restore_ai_tabs:main"
 
 [tool.setuptools]
-py-modules = ["restore_ai_tabs"]
+py-modules = ["restore_ai_tabs", "restore_ai_tabs_iterm"]

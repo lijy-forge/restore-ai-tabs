@@ -37,6 +37,7 @@ Windows Terminal、iTerm2 自带的"恢复窗口"只恢复布局和目录，不�
 - **Claude Code 和 Codex 一起恢复**：按最近活动时间排序，显示目录和你的第一句话，一眼就能认出是哪个。
 - **加到当前窗口**：新开的 tab 名自动设为项目目录名。
 - **启动时自动提醒**：终端重新打开时，如果有中断的会话，会问你要不要恢复，不用记命令。
+- **进阶（macOS + iTerm2）**：精确还原死机前的窗口、tab 和分屏布局；左侧 tab 栏实时显示每个 Agent 的状态：🟢 运行中、🟡 等你确认、✅ 已完成。
 - **单文件、几乎零依赖**：macOS 上只用系统自带的 Python；Windows 只多一个 `windows-curses`，用于复选框界面。
 - **中文友好**：中文路径、中文标题都能正常对齐。
 
@@ -102,6 +103,41 @@ restore-ai-tabs --print-hook powershell >> $PROFILE
 
 每次终端启动只提醒一次，没有中断的会话时不会有任何输出。检查的时间范围可以用环境变量 `RESTORE_AI_TABS_CHECK_HOURS` 调整。
 
+## 进阶：精确恢复布局 + tab 状态（macOS + iTerm2）
+
+基础功能只能"推测"死机前开着哪些会话。运行一次 `setup` 后，工具会在后台持续记录，恢复时能做到和死机前完全一样：
+
+```bash
+restore-ai-tabs setup
+```
+
+然后在 iTerm2 里打开 Python API：Settings → General → Magic → 勾选 **Enable Python API**（在 Settings 右上角搜索 `Python` 能直接找到）。第一次运行后台脚本时，iTerm2 会提示下载它自带的 Python 运行环境，选下载即可。
+
+**1. 精确恢复布局**
+
+后台脚本随 iTerm2 启动，布局一变化（开 tab、分屏、关窗格）就保存快照：每个窗口、每个 tab、分屏方向，以及每个窗格的目录和里面跑的会话。iTerm2 下次启动时会提示：
+
+```
+⟲ 上次 iTerm 关闭前（3分钟前）有 2 个窗口、10 个 tab、11 个窗格，其中 10 个 AI 会话。
+回车 = 按原布局恢复，s = 逐个选择会话，其他键 = 跳过
+```
+
+按回车，就会按原来的窗口、tab 顺序和分屏结构重建，并在每个窗格里 resume 对应的会话；没跑 AI 的窗格会回到原来的目录。也可以手动运行 `restore-ai-tabs --layout`，或用 `restore-ai-tabs --layout --dry-run` 先看看会恢复成什么样。
+
+**2. tab 状态**
+
+`setup` 会在 Claude Code 里装上钩子，后台脚本据此给 tab 改标题和颜色：
+
+| 状态 | 什么时候 |
+|---|---|
+| 🟢 运行中 | 你发出消息后、工具调用进行中 |
+| 🟡 等你确认 | Claude 请求权限，需要你点确认 |
+| ✅ 已完成 | 这一轮回答结束 |
+
+建议把 tab 栏放到左边（Settings → Appearance → General → Tab bar location 选 Left），效果类似 cmux 的侧边栏。tab 标题会显示成"状态 + 项目目录名"。
+
+`restore-ai-tabs uninstall` 可以一键移除钩子和后台脚本，你在 Claude Code 里自己配置的其他钩子不受影响。
+
 ## 支持的平台
 
 | 系统 | 终端 | 打开方式 |
@@ -123,9 +159,10 @@ restore-ai-tabs --print-hook powershell >> $PROFILE
 **怎么判断"正在运行"：**
 
 - macOS：满足以下任一条件就算运行中：
+  - Claude Code 为每个运行中的进程写了 `~/.claude/sessions/<pid>.json`，里面就是当前会话 ID（最准确）
   - 会话文件正被某个进程打开着（Codex）
-  - 某个进程的启动参数里带着这个会话的 ID
-  - 某个 `claude` 进程的工作目录和会话目录一致，并且这个会话是该目录下最近活动的
+  - 某个进程的启动参数里带着这个会话的 ID（`claude --resume <id>`、`codex resume <id>`）
+  - 以上都没有时：某个 `claude` 进程的工作目录和会话目录一致，并且这个会话是该目录下最近活动的
 - Windows：拿不到进程的工作目录，所以采用：
   - 进程启动参数里带着会话 ID
   - 有 `claude` 进程在运行时，最近 2 分钟内还在写入的会话也算运行中
@@ -142,7 +179,11 @@ CI 会在 macOS、Windows、Ubuntu 上，分别用 Python 3.9 和 3.12 跑完整
 
 ## 计划
 
-- [ ] 死机前快照：后台定时记录每个 tab 里在运行哪个会话，恢复时精确还原
+- [x] 死机前快照：精确还原窗口、tab、分屏和会话（macOS + iTerm2）
+- [x] tab 状态：运行中 / 等你确认 / 已完成
+- [ ] Codex 的 tab 状态
+- [ ] 还原分屏比例（目前按平均分）
+- [ ] Windows Terminal 的布局恢复
 - [ ] 支持 Terminal.app、Warp、tmux
 - [ ] 显示每个会话的最后一条消息作为预览
 - [ ] 支持更多 AI CLI（Gemini CLI、Aider……）
@@ -163,7 +204,9 @@ restore-ai-tabs                              # pick sessions to restore
 restore-ai-tabs --print-hook zsh >> ~/.zshrc # prompt automatically after a crash
 ```
 
-Flags: `-H/--hours`, `--all`, `--list`, `--dry-run`, `--new-window`, `--terminal`, `--check`, `--print-hook`.
+On macOS + iTerm2, `restore-ai-tabs setup` adds an iTerm2 background script and Claude Code hooks: your exact window / tab / split layout is snapshotted on every change and rebuilt on the next launch, and each tab shows the agent's state (🟢 running, 🟡 needs approval, ✅ done) — a cmux-style sidebar when the tab bar is on the left.
+
+Flags: `-H/--hours`, `--all`, `--list`, `--dry-run`, `--new-window`, `--terminal`, `--layout`, `--sessions`, `--check`, `--print-hook`. Commands: `setup`, `uninstall`.
 
 ## License
 

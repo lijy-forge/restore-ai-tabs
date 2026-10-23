@@ -142,3 +142,96 @@ class CliTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+SNAP = {"windows": [{"tabs": [
+    {"root": {"split": "vertical", "children": [
+        {"pane": {"cwd": "/work/api", "agent": {"tool": "claude", "id": "aaa", "cwd": "/work/api"}}},
+        {"split": "horizontal", "children": [
+            {"pane": {"cwd": "/work/web", "agent": {"tool": "codex", "id": "bbb", "cwd": "/work/web"}}},
+            {"pane": {"cwd": "/tmp", "agent": None}}]}]}},
+    {"root": {"pane": {"cwd": "/work/docs", "agent": None}}}]}]}
+
+
+class LayoutTest(unittest.TestCase):
+    def test_stats(self):
+        self.assertEqual(rat.snapshot_stats(SNAP), (1, 2, 4, 2))
+
+    def test_layout_script_rebuilds_splits_and_resumes(self):
+        script = rat.layout_script(SNAP, running_ids=set())
+        self.assertEqual(script.count("create window"), 1)
+        self.assertEqual(script.count("create tab"), 1)
+        self.assertIn("tell s1 to set s2 to (split vertically", script)
+        self.assertIn("tell s2 to set s3 to (split horizontally", script)
+        self.assertIn('write text "cd /work/api && claude --resume aaa"', script)
+        self.assertIn('write text "cd /work/web && codex resume bbb"', script)
+        self.assertIn('write text "cd /tmp"', script)
+
+    def test_running_sessions_only_cd(self):
+        script = rat.layout_script(SNAP, running_ids={"aaa"})
+        self.assertIn('write text "cd /work/api"', script)
+        self.assertNotIn("claude --resume aaa", script)
+
+
+class StateTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved = {k: getattr(rat, k) for k in
+                      ("STATE_DIR", "SNAPSHOT_DIR", "STATUS_DIR", "CLAUDE_SETTINGS", "terminal_launch_id")}
+        rat.STATE_DIR = self.tmp.name
+        rat.SNAPSHOT_DIR = os.path.join(self.tmp.name, "snapshots")
+        rat.STATUS_DIR = os.path.join(self.tmp.name, "status")
+        rat.CLAUDE_SETTINGS = os.path.join(self.tmp.name, "settings.json")
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            setattr(rat, k, v)
+        self.tmp.cleanup()
+
+    def send_hook(self, event, **extra):
+        payload = dict(session_id="s1", hook_event_name=event, **extra)
+        old = sys.stdin
+        sys.stdin = __import__("io").StringIO(json.dumps(payload))
+        try:
+            rat.hook()
+        finally:
+            sys.stdin = old
+        return rat.read_statuses().get("s1")
+
+    def test_hook_state_machine(self):
+        self.assertEqual(self.send_hook("UserPromptSubmit"), "running")
+        self.assertEqual(self.send_hook("Notification", message="Claude needs your permission to use Bash"), "waiting")
+        self.assertEqual(self.send_hook("PostToolUse"), "running")
+        self.assertEqual(self.send_hook("Stop"), "done")
+        self.assertEqual(self.send_hook("Notification", message="Claude is waiting for your input"), "done")
+        self.assertIsNone(self.send_hook("SessionEnd"))
+
+    def test_hook_never_raises_on_bad_input(self):
+        old = sys.stdin
+        sys.stdin = __import__("io").StringIO("not json")
+        try:
+            rat.hook()
+        finally:
+            sys.stdin = old
+
+    def test_install_and_remove_hooks_keep_user_hooks(self):
+        mine = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "say done"}]}]}, "model": "x"}
+        rat.write_json(rat.CLAUDE_SETTINGS, mine)
+        rat.install_claude_hooks()
+        rat.install_claude_hooks()  # 重复安装不应重复添加
+        s = rat.read_json(rat.CLAUDE_SETTINGS)
+        self.assertEqual(len(s["hooks"]["Stop"]), 2)
+        self.assertEqual(set(s["hooks"]), set(rat.HOOK_EVENTS))
+        rat.remove_claude_hooks()
+        self.assertEqual(rat.read_json(rat.CLAUDE_SETTINGS), mine)
+
+    def test_previous_snapshot_skips_current_launch_and_consumed(self):
+        rat.save_snapshot("old-launch", SNAP)
+        rat.terminal_launch_id = lambda: "old-launch"
+        self.assertIsNone(rat.previous_snapshot())
+        rat.terminal_launch_id = lambda: "new-launch"
+        snap = rat.previous_snapshot()
+        self.assertEqual(snap["launch"], "old-launch")
+        rat.mark_consumed(snap)
+        self.assertIsNone(rat.previous_snapshot())
+        self.assertIsNotNone(rat.previous_snapshot(include_consumed=True))
