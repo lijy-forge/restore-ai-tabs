@@ -2,7 +2,7 @@
 
 由 `restore-ai-tabs setup` 安装到 iTerm2 的 AutoLaunch 目录，随 iTerm2 启动，负责：
   1. 布局一变化就保存快照：窗口 / tab / 分屏结构，每个窗格的目录和里面跑的 AI 会话
-  2. 把 Claude Code 钩子上报的状态画到 tab 上：🟢 运行中 / 🟡 等你确认 / ✅ 已完成
+  2. 把 Claude Code 钩子上报的状态画到 tab 上：🔵 运行中 / 🟡 等你确认 / ✅ 已完成
 """
 import asyncio
 import os
@@ -15,8 +15,8 @@ POLL_SECONDS = 2
 
 STATUS_STYLE = {
     "waiting": ("🟡", (255, 176, 32)),
-    "running": ("🟢", (52, 199, 89)),
-    "done": ("✅", (110, 140, 190)),
+    "running": ("🔵", (10, 132, 255)),
+    "done": ("✅", (142, 142, 147)),
 }
 PRIORITY = ["waiting", "running", "done"]
 

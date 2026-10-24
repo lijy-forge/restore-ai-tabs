@@ -37,7 +37,7 @@ Windows Terminal、iTerm2 自带的"恢复窗口"只恢复布局和目录，不�
 - **Claude Code 和 Codex 一起恢复**：按最近活动时间排序，显示目录和你的第一句话，一眼就能认出是哪个。
 - **加到当前窗口**：新开的 tab 名自动设为项目目录名。
 - **启动时自动提醒**：终端重新打开时，如果有中断的会话，会问你要不要恢复，不用记命令。
-- **进阶（macOS + iTerm2）**：精确还原死机前的窗口、tab 和分屏布局；左侧 tab 栏实时显示每个 Agent 的状态：🟢 运行中、🟡 等你确认、✅ 已完成。
+- **进阶（macOS + iTerm2）**：精确还原死机前的窗口、tab 和分屏布局；左侧 tab 栏实时显示每个 Agent 的状态：🔵 运行中、🟡 等你确认、✅ 已完成。
 - **单文件、几乎零依赖**：macOS 上只用系统自带的 Python；Windows 只多一个 `windows-curses`，用于复选框界面。
 - **中文友好**：中文路径、中文标题都能正常对齐。
 
@@ -130,7 +130,7 @@ restore-ai-tabs setup
 
 | 状态 | 什么时候 |
 |---|---|
-| 🟢 运行中 | 你发出消息后、工具调用进行中 |
+| 🔵 运行中 | 你发出消息后、工具调用进行中 |
 | 🟡 等你确认 | Claude 请求权限，需要你点确认 |
 | ✅ 已完成 | 这一轮回答结束 |
 
@@ -204,7 +204,7 @@ restore-ai-tabs                              # pick sessions to restore
 restore-ai-tabs --print-hook zsh >> ~/.zshrc # prompt automatically after a crash
 ```
 
-On macOS + iTerm2, `restore-ai-tabs setup` adds an iTerm2 background script and Claude Code hooks: your exact window / tab / split layout is snapshotted on every change and rebuilt on the next launch, and each tab shows the agent's state (🟢 running, 🟡 needs approval, ✅ done) — a cmux-style sidebar when the tab bar is on the left.
+On macOS + iTerm2, `restore-ai-tabs setup` adds an iTerm2 background script and Claude Code hooks: your exact window / tab / split layout is snapshotted on every change and rebuilt on the next launch, and each tab shows the agent's state (🔵 running, 🟡 needs approval, ✅ done) — a cmux-style sidebar when the tab bar is on the left.
 
 Flags: `-H/--hours`, `--all`, `--list`, `--dry-run`, `--new-window`, `--terminal`, `--layout`, `--sessions`, `--check`, `--print-hook`. Commands: `setup`, `uninstall`.
 
