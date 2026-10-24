@@ -126,9 +126,9 @@ def is_agent_cmdline(args):
     return False
 
 
-def run(cmd):
+def run(cmd, env=None):
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=10, env=env).stdout
     except (OSError, subprocess.SubprocessError):
         return ""
 
@@ -466,7 +466,8 @@ def terminal_launch_id():
                    "Get-Process WindowsTerminal -ErrorAction SilentlyContinue | Sort-Object StartTime "
                    "| Select-Object -First 1 | ForEach-Object { \"$($_.Id) $($_.StartTime.Ticks)\" }"])
         return out.strip() or None
-    for line in run(["ps", "-Ao", "pid=,lstart=,comm="]).splitlines():
+    # 固定语言：lstart 的格式随语言变化（"五 10/23" vs "Fri Oct 23"），后台脚本和终端里的语言可能不同
+    for line in run(["ps", "-Ao", "pid=,lstart=,comm="], env=dict(os.environ, LC_ALL="C")).splitlines():
         if line.rstrip().endswith("MacOS/iTerm2"):
             return line.rsplit(" ", 1)[0].strip()
     return None
