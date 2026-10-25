@@ -145,7 +145,7 @@ restore-ai-tabs setup
 |---|---|
 | 🔵 运行中 | 你发出消息后、工具调用进行中 |
 | 🟡 等你确认 | Claude 请求权限，需要你点确认 |
-| ✅ 已完成 | 这一轮回答结束 |
+| ✅ 已完成 | 这一轮回答结束；切到这个 tab 看过之后自动消失 |
 
 建议把 tab 栏放到左边（Settings → Appearance → General → Tab bar location 选 Left），效果类似 cmux 的侧边栏。tab 标题会显示成"状态 + 项目目录名"。
 

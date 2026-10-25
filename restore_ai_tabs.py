@@ -921,6 +921,18 @@ def hook():
         pass
 
 
+def clear_done(session_ids, since=0):
+    """看过的"已完成"状态清掉：只删 since 之后才完成的，运行中 / 等你确认的不动。"""
+    for sid in session_ids:
+        path = os.path.join(STATUS_DIR, sid + ".json")
+        d = read_json(path)
+        if d and d.get("state") == "done" and d.get("ts", 0) >= since:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
 def read_statuses():
     out = {}
     for f in glob.glob(os.path.join(STATUS_DIR, "*.json")):

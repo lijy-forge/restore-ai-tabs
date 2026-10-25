@@ -3,9 +3,11 @@
 由 `restore-ai-tabs setup` 安装到 iTerm2 的 AutoLaunch 目录，随 iTerm2 启动，负责：
   1. 布局一变化就保存快照：窗口 / tab / 分屏结构，每个窗格的目录和里面跑的 AI 会话
   2. 把 Claude Code 钩子上报的状态画到 tab 上：🔵 运行中 / 🟡 等你确认 / ✅ 已完成
+     ✅ 只是提醒"这一轮好了"：切到那个 tab 看过之后就清掉
 """
 import asyncio
 import os
+import time
 
 import iterm2
 
@@ -58,6 +60,15 @@ async def take_snapshot(app):
     return {"windows": windows}, tabs
 
 
+def claude_ids(panes):
+    return [a["id"] for _, a in panes if a and a["tool"] == "claude"]
+
+
+def focused_tab_id(app):
+    window = app.current_terminal_window
+    return window.current_tab.tab_id if window and window.current_tab else None
+
+
 def tab_status(panes, statuses):
     found = [statuses.get(a["id"]) for _, a in panes if a and a["tool"] == "claude"]
     for state in PRIORITY:
@@ -85,9 +96,12 @@ async def paint(tab, panes, state, cwd):
 async def main(connection):
     launch = rat.terminal_launch_id() or "unknown"
     painted = {}  # tab_id -> 上次画上去的状态
+    seen = set()
     last_saved = None
+    focused, focused_at = None, 0.0  # 当前看着的 tab，以及从什么时候开始看的
 
-    async with iterm2.LayoutChangeMonitor(connection) as monitor:
+    async with iterm2.LayoutChangeMonitor(connection) as layout, iterm2.FocusMonitor(connection) as focus:
+        layout_wait = focus_wait = None
         while True:
             try:
                 app = await iterm2.async_get_app(connection)
@@ -96,8 +110,24 @@ async def main(connection):
                     rat.save_snapshot(launch, snapshot)
                     last_saved = snapshot
 
+                # 切到某个 tab：它的 ✅ 算看过了；离开某个 tab：在那里看着完成的 ✅ 也算看过了
+                now = focused_tab_id(app)
+                if now != focused:
+                    for tab, panes in tabs:
+                        if tab.tab_id == now:
+                            rat.clear_done(claude_ids(panes))
+                        elif tab.tab_id == focused:
+                            rat.clear_done(claude_ids(panes), since=focused_at)
+                    focused, focused_at = now, time.time()
+
                 statuses = rat.read_statuses()
                 for tab, panes in tabs:
+                    if tab.tab_id not in seen:
+                        # 后台脚本重启后，认领之前画过状态的 tab，旧的状态才能被清掉
+                        seen.add(tab.tab_id)
+                        title = await tab.async_get_variable("titleOverride") or ""
+                        if title.startswith(tuple(e for e, _ in STATUS_STYLE.values())):
+                            painted[tab.tab_id] = "unknown"
                     state = tab_status(panes, statuses)
                     # 只改有状态的 tab，或者之前被我们改过的 tab；不动用户自己命名的 tab
                     if painted.get(tab.tab_id) != state and (state or tab.tab_id in painted):
@@ -106,10 +136,15 @@ async def main(connection):
                         painted[tab.tab_id] = state
             except Exception as e:  # 后台脚本不能因为一次异常就退出
                 print("restore-ai-tabs:", repr(e))
-            try:
-                await asyncio.wait_for(monitor.async_get(), timeout=POLL_SECONDS)
-            except asyncio.TimeoutError:
-                pass
+            # 布局变化、切换 tab 都立刻刷新，否则每 POLL_SECONDS 秒刷新一次
+            layout_wait = layout_wait or asyncio.ensure_future(layout.async_get())
+            focus_wait = focus_wait or asyncio.ensure_future(focus.async_get_next_update())
+            done, _ = await asyncio.wait({layout_wait, focus_wait}, timeout=POLL_SECONDS,
+                                         return_when=asyncio.FIRST_COMPLETED)
+            if layout_wait in done:
+                layout_wait = None
+            if focus_wait in done:
+                focus_wait = None
 
 
 def run():

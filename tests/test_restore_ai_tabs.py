@@ -236,6 +236,16 @@ class StateTest(unittest.TestCase):
         self.assertIsNone(rat.previous_snapshot())
         self.assertIsNotNone(rat.previous_snapshot(include_consumed=True))
 
+    def test_clear_done_only_touches_seen_done(self):
+        self.send_hook("Stop")
+        rat.clear_done(["s1"], since=time.time() + 60)  # 完成在开始看之前：离开时不清
+        self.assertEqual(rat.read_statuses().get("s1"), "done")
+        rat.clear_done(["s1"])
+        self.assertIsNone(rat.read_statuses().get("s1"))
+        self.send_hook("UserPromptSubmit")
+        rat.clear_done(["s1"])
+        self.assertEqual(rat.read_statuses().get("s1"), "running")
+
 
 class SearchTest(unittest.TestCase):
     def setUp(self):
@@ -291,3 +301,4 @@ class SearchTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn("登录接口", out.stdout)
         self.assertNotIn("Cloudflare", out.stdout)
+
