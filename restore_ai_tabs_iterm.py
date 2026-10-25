@@ -2,7 +2,8 @@
 
 由 `restore-ai-tabs setup` 安装到 iTerm2 的 AutoLaunch 目录，随 iTerm2 启动，负责：
   1. 布局一变化就保存快照：窗口 / tab / 分屏结构，每个窗格的目录和里面跑的 AI 会话
-  2. 把 Claude Code 钩子上报的状态画到 tab 上：🔵 运行中 / 🟡 等你确认 / ✅ 已完成
+  2. 把 Claude Code 钩子上报的状态画到 tab 上：🔵 运行中 / 🟡 等你确认 / 🟣 后台运行中 / ✅ 已完成
+     🟣：回答结束了，但还有它启动的后台命令在跑；后台命令全部结束后变成 ✅
      ✅ 只是提醒"这一轮好了"：切到那个 tab 看过之后就清掉
 """
 import asyncio
@@ -18,9 +19,10 @@ POLL_SECONDS = 2
 STATUS_STYLE = {
     "waiting": ("🟡", (255, 176, 32)),
     "running": ("🔵", (10, 132, 255)),
+    "background": ("🟣", (175, 82, 222)),
     "done": ("✅", (142, 142, 147)),
 }
-PRIORITY = ["waiting", "running", "done"]
+PRIORITY = ["waiting", "running", "background", "done"]
 
 
 async def pane_info(session):
@@ -69,8 +71,15 @@ def focused_tab_id(app):
     return window.current_tab.tab_id if window and window.current_tab else None
 
 
-def tab_status(panes, statuses):
-    found = [statuses.get(a["id"]) for _, a in panes if a and a["tool"] == "claude"]
+def session_state(sid, statuses, background):
+    state = statuses.get(sid)
+    if state in (None, "done") and background.get(sid):
+        return "background"
+    return state
+
+
+def tab_status(panes, statuses, background):
+    found = [session_state(sid, statuses, background) for sid in claude_ids(panes)]
     for state in PRIORITY:
         if state in found:
             return state
@@ -97,6 +106,7 @@ async def main(connection):
     launch = rat.terminal_launch_id() or "unknown"
     painted = {}  # tab_id -> 上次画上去的状态
     seen = set()
+    was_background = set()
     last_saved = None
     focused, focused_at = None, 0.0  # 当前看着的 tab，以及从什么时候开始看的
 
@@ -120,6 +130,12 @@ async def main(connection):
                             rat.clear_done(claude_ids(panes), since=focused_at)
                     focused, focused_at = now, time.time()
 
+                # 后台命令全部跑完：标成 ✅，提醒你回来看结果
+                background = rat.background_shells()
+                for sid in was_background - set(background):
+                    rat.set_done(sid)
+                was_background = set(background)
+
                 statuses = rat.read_statuses()
                 for tab, panes in tabs:
                     if tab.tab_id not in seen:
@@ -128,7 +144,7 @@ async def main(connection):
                         title = await tab.async_get_variable("titleOverride") or ""
                         if title.startswith(tuple(e for e, _ in STATUS_STYLE.values())):
                             painted[tab.tab_id] = "unknown"
-                    state = tab_status(panes, statuses)
+                    state = tab_status(panes, statuses, background)
                     # 只改有状态的 tab，或者之前被我们改过的 tab；不动用户自己命名的 tab
                     if painted.get(tab.tab_id) != state and (state or tab.tab_id in painted):
                         agent_cwd = next((a["cwd"] for _, a in panes if a), "")

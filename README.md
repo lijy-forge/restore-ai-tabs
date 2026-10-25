@@ -38,7 +38,7 @@ Windows Terminal、iTerm2 自带的"恢复窗口"只恢复布局和目录，不�
 - **加到当前窗口**：新开的 tab 名自动设为项目目录名。
 - **按对话内容搜索**：`restore-ai-tabs search Redis 限流`，在所有历史会话里找"那个聊过 Redis 限流的会话"，勾选后直接恢复。
 - **启动时自动提醒**：终端重新打开时，如果有中断的会话，会问你要不要恢复，不用记命令。
-- **进阶（macOS + iTerm2）**：精确还原死机前的窗口、tab 和分屏布局；左侧 tab 栏实时显示每个 Agent 的状态：🔵 运行中、🟡 等你确认、✅ 已完成。
+- **进阶（macOS + iTerm2）**：精确还原死机前的窗口、tab 和分屏布局；左侧 tab 栏实时显示每个 Agent 的状态：🔵 运行中、🟡 等你确认、🟣 后台运行中、✅ 已完成。
 - **单文件、几乎零依赖**：macOS 上只用系统自带的 Python；Windows 只多一个 `windows-curses`，用于复选框界面。
 - **中文友好**：中文路径、中文标题都能正常对齐。
 
@@ -145,6 +145,7 @@ restore-ai-tabs setup
 |---|---|
 | 🔵 运行中 | 你发出消息后、工具调用进行中 |
 | 🟡 等你确认 | Claude 请求权限，需要你点确认 |
+| 🟣 后台运行中 | 回答结束了，但它启动的后台命令（如 `npm run dev`、长时间的测试）还在跑；全部结束后变成 ✅ |
 | ✅ 已完成 | 这一轮回答结束；切到这个 tab 看过之后自动消失 |
 
 建议把 tab 栏放到左边（Settings → Appearance → General → Tab bar location 选 Left），效果类似 cmux 的侧边栏。tab 标题会显示成"状态 + 项目目录名"。
@@ -219,7 +220,7 @@ restore-ai-tabs --print-hook zsh >> ~/.zshrc # prompt automatically after a cras
 restore-ai-tabs search redis rate limit      # full-text search over all past conversations
 ```
 
-On macOS + iTerm2, `restore-ai-tabs setup` adds an iTerm2 background script and Claude Code hooks: your exact window / tab / split layout is snapshotted on every change and rebuilt on the next launch, and each tab shows the agent's state (🔵 running, 🟡 needs approval, ✅ done) — a cmux-style sidebar when the tab bar is on the left.
+On macOS + iTerm2, `restore-ai-tabs setup` adds an iTerm2 background script and Claude Code hooks: your exact window / tab / split layout is snapshotted on every change and rebuilt on the next launch, and each tab shows the agent's state (🔵 running, 🟡 needs approval, 🟣 background commands still running, ✅ done) — a cmux-style sidebar when the tab bar is on the left.
 
 Flags: `-H/--hours`, `-s/--search`, `--all`, `--list`, `--dry-run`, `--new-window`, `--terminal`, `--layout`, `--sessions`, `--check`, `--print-hook`. Commands: `setup`, `uninstall`, `search`.
 

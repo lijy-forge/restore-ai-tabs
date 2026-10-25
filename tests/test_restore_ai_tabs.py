@@ -246,6 +246,19 @@ class StateTest(unittest.TestCase):
         rat.clear_done(["s1"])
         self.assertEqual(rat.read_statuses().get("s1"), "running")
 
+    def test_background_shells_only_count_claude_command_shells(self):
+        saved = rat.run, rat.live_claude_sessions, rat.IS_WIN
+        rat.IS_WIN = False
+        rat.live_claude_sessions = lambda: {"100": {"tool": "claude", "id": "s1", "cwd": "/w"}}
+        rat.run = lambda cmd, env=None: (
+            "200 100 /bin/zsh -c source /Users/me/.claude/shell-snapshots/snapshot-zsh-1.sh && npm run dev\n"
+            "201 100 node /usr/lib/mcp-server/index.js\n"
+            "202 999 /bin/zsh -c source /Users/me/.claude/shell-snapshots/snapshot-zsh-2.sh && sleep 9\n")
+        try:
+            self.assertEqual(rat.background_shells(), {"s1": 1})
+        finally:
+            rat.run, rat.live_claude_sessions, rat.IS_WIN = saved
+
 
 class SearchTest(unittest.TestCase):
     def setUp(self):

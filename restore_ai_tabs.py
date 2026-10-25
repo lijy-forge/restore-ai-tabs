@@ -921,6 +921,27 @@ def hook():
         pass
 
 
+def background_shells():
+    """{会话 ID: 数量}：Claude Code 在后台跑着的命令（run_in_background 等）。
+
+    它们是 claude 进程的子进程，命令行里会 source ~/.claude/shell-snapshots/ 下的环境快照，
+    据此和 MCP 服务等其他子进程区分开。"""
+    if IS_WIN:
+        return {}
+    by_pid = {pid: a["id"] for pid, a in live_claude_sessions().items()}
+    out = {}
+    for line in run(["ps", "-Ao", "pid=,ppid=,args="]).splitlines():
+        parts = line.split(None, 2)
+        if len(parts) == 3 and parts[1] in by_pid and "/.claude/shell-snapshots/" in parts[2]:
+            sid = by_pid[parts[1]]
+            out[sid] = out.get(sid, 0) + 1
+    return out
+
+
+def set_done(sid):
+    write_json(os.path.join(STATUS_DIR, sid + ".json"), {"state": "done", "ts": time.time()})
+
+
 def clear_done(session_ids, since=0):
     """看过的"已完成"状态清掉：只删 since 之后才完成的，运行中 / 等你确认的不动。"""
     for sid in session_ids:
