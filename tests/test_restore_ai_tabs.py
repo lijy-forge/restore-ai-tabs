@@ -235,3 +235,59 @@ class StateTest(unittest.TestCase):
         rat.mark_consumed(snap)
         self.assertIsNone(rat.previous_snapshot())
         self.assertIsNotNone(rat.previous_snapshot(include_consumed=True))
+
+
+class SearchTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = self.tmp.name
+        self.project = os.path.join(self.home, "proj")
+        make_home(self.home, self.project)
+        self.saved = (rat.HOME, rat.INDEX_FILE)
+        rat.HOME = self.home
+        rat.INDEX_FILE = os.path.join(self.home, "cache", "search-index.json")
+        self.claude = os.path.join(self.home, ".claude", "projects", "-proj", CLAUDE_ID + ".jsonl")
+
+    def tearDown(self):
+        rat.HOME, rat.INDEX_FILE = self.saved
+        self.tmp.cleanup()
+
+    def append(self, raw):
+        with open(self.claude, "a", encoding="utf-8") as fh:
+            fh.write(raw)
+
+    def test_searches_user_and_assistant_text_only(self):
+        self.append(json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "原因是 Redis 限流的阈值太低"},
+            {"type": "tool_use", "input": {"cmd": "grep 秘密工具输出"}}]}}, ensure_ascii=False) + "\n")
+        hits = rat.search_sessions("redis 限流")
+        self.assertEqual([h["id"] for h in hits], [CLAUDE_ID])
+        self.assertIn("限流", hits[0]["title"])
+        self.assertEqual(rat.search_sessions("秘密工具输出"), [])
+        self.assertEqual([h["id"] for h in rat.search_sessions("cloudflare")], [CODEX_ID])
+        self.assertEqual(len(rat.search_sessions("很久以前")), 1)  # 搜索默认不限时间
+        self.assertEqual(rat.search_sessions("很久以前", hours=6), [])
+
+    def test_incremental_update_and_partial_line(self):
+        rat.load_index()
+        self.append('{"type": "user", "message": {"content": "新加的问题 alpha"}}\n{"type": "user", "mess')
+        self.assertEqual(len(rat.search_sessions("alpha")), 1)
+        self.append('age": {"content": "后半行 beta"}}\n')
+        self.assertEqual(len(rat.search_sessions("beta")), 1)
+        entry = rat.load_index()[self.claude]
+        self.assertEqual(entry["offset"], os.path.getsize(self.claude))
+        self.assertEqual(entry["texts"].count("新加的问题 alpha"), 1)
+
+    def test_deleted_sessions_leave_index(self):
+        rat.load_index()
+        os.remove(self.claude)
+        self.assertNotIn(self.claude, rat.load_index())
+        self.assertEqual(rat.search_sessions("登录接口"), [])
+
+    def test_cli_search(self):
+        env = dict(os.environ, HOME=self.home, USERPROFILE=self.home, PYTHONIOENCODING="utf-8")
+        out = subprocess.run([sys.executable, os.path.join(ROOT, "restore_ai_tabs.py"), "search", "登录接口", "--list"],
+                             capture_output=True, text=True, encoding="utf-8", env=env, timeout=60)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("登录接口", out.stdout)
+        self.assertNotIn("Cloudflare", out.stdout)

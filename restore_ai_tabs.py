@@ -9,6 +9,7 @@
   restore-ai-tabs --all        # 不询问，恢复所有没在运行的会话
   restore-ai-tabs --list       # 只列出，不打开
   restore-ai-tabs --dry-run    # 打印将要执行的命令，不打开
+  restore-ai-tabs search 限流  # 按对话内容搜索全部历史会话
   restore-ai-tabs --new-window # 在新窗口打开（默认加到当前窗口）
   restore-ai-tabs --check      # 放进 shell 启动脚本：终端启动后第一次开 shell 时，
                                # 如果有最近中断的会话，就提示是否恢复
@@ -26,7 +27,7 @@ import sys
 import time
 import unicodedata
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
 HOME = os.path.expanduser("~")
@@ -113,6 +114,134 @@ def resume_args(it):
     if it["tool"] == "claude":
         return ["claude", "--resume", it["id"]]
     return ["codex", "resume", it["id"]]
+
+
+# ---------- 全文搜索 ----------
+# 只缓存对话文字（你说的话 + AI 的回答），不含工具输出和文件内容。
+# 会话文件只会往后追加，所以按上次读到的位置增量读取。
+
+INDEX_FILE = os.path.join(os.path.dirname(STATE_FILE), "search-index.json")
+INDEX_VERSION = 1
+
+
+def all_session_files():
+    return (glob.glob(os.path.join(HOME, ".claude", "projects", "*", "*.jsonl"))
+            + glob.glob(os.path.join(HOME, ".codex", "sessions", "*", "*", "*", "rollout-*.jsonl")))
+
+
+def all_texts(content):
+    if isinstance(content, str):
+        return [content]
+    if isinstance(content, list):
+        return [b.get("text", "") for b in content
+                if isinstance(b, dict) and b.get("type") in ("text", "input_text", "output_text")]
+    return []
+
+
+def extract(entry, d):
+    """把一行记录里的对话文字追加到 entry。"""
+    if entry["tool"] == "claude":
+        entry["cwd"] = entry["cwd"] or d.get("cwd")
+        role = d.get("type")
+        if role not in ("user", "assistant") or d.get("isMeta") or d.get("isSidechain"):
+            return
+        texts = all_texts((d.get("message") or {}).get("content"))
+    else:
+        p = d.get("payload") or {}
+        if d.get("type") == "session_meta":
+            entry["id"], entry["cwd"] = p.get("id"), p.get("cwd")
+            return
+        role = p.get("role")
+        if d.get("type") != "response_item" or role not in ("user", "assistant"):
+            return
+        texts = all_texts(p.get("content"))
+    for t in texts:
+        t = t.strip()
+        if not t or (role == "user" and t.startswith("<")):
+            continue
+        if role == "user" and not entry["title"]:
+            entry["title"] = one_line(t)
+        entry["texts"].append(t)
+
+
+def index_file(path, entry):
+    """读取 path 里 entry["offset"] 之后新增的完整行；文件变短（被重写）就从头读。"""
+    st = os.stat(path)
+    if entry and entry["size"] == st.st_size and entry["mtime"] == st.st_mtime:
+        return entry, False
+    if not entry or st.st_size < entry["offset"]:
+        tool = "codex" if os.sep + ".codex" + os.sep in path else "claude"
+        entry = dict(tool=tool, id=None if tool == "codex" else os.path.basename(path)[:-6],
+                     cwd=None, title="", texts=[], offset=0)
+    with open(path, "rb") as fh:
+        fh.seek(entry["offset"])
+        data = fh.read()
+    end = data.rfind(b"\n") + 1  # 最后一行可能还没写完，留到下次
+    for line in data[:end].decode("utf-8", "ignore").splitlines():
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(d, dict):
+            extract(entry, d)
+    entry.update(offset=entry["offset"] + end, size=st.st_size, mtime=st.st_mtime)
+    return entry, True
+
+
+def load_index(paths=None):
+    """更新并返回 {文件路径: 条目}。paths 为空时更新全部会话，并删掉已经不存在的会话。"""
+    index = read_json(INDEX_FILE, {})
+    files = index.get("files", {}) if index.get("version") == INDEX_VERSION else {}
+    changed = False
+    for p in (all_session_files() if paths is None else paths):
+        try:
+            files[p], dirty = index_file(p, files.get(p))
+        except OSError:
+            continue
+        changed |= dirty
+    if paths is None:
+        for p in [p for p in files if not os.path.exists(p)]:
+            del files[p]
+            changed = True
+    if changed:
+        write_json(INDEX_FILE, {"version": INDEX_VERSION, "files": files})
+    return files
+
+
+def snippet(text, term, width=70):
+    i = text.lower().find(term)
+    if i < 0:
+        return ""
+    start = max(0, i - width // 3)
+    s = one_line(text[start:start + width])
+    return ("…" if start else "") + s + "…"
+
+
+def content_match(texts, terms):
+    """所有关键词都出现在对话里时，返回第一个关键词所在的片段，否则返回 None。"""
+    body = "\n".join(texts).lower()
+    if not all(t in body for t in terms):
+        return None
+    for t in texts:
+        s = snippet(t, terms[0])
+        if s:
+            return s
+    return ""
+
+
+def search_sessions(query, hours=None):
+    terms = query.lower().split()
+    since = time.time() - hours * 3600 if hours else 0
+    out = []
+    for path, e in load_index().items():
+        if not e["cwd"] or not e["id"] or e["mtime"] < since:
+            continue
+        hay = [e["cwd"], e["tool"]] + e["texts"]
+        snip = content_match(hay, terms)
+        if snip is not None:
+            out.append(dict(tool=e["tool"], id=e["id"], cwd=e["cwd"], mtime=e["mtime"],
+                            title=snip or e["title"], path=path))
+    return sorted(out, key=lambda x: -x["mtime"])
 
 
 # ---------- 判断哪些会话正在运行 ----------
@@ -240,7 +369,7 @@ def status(it):
 
 # ---------- 选择界面 ----------
 
-HELP = "↑↓ 移动  空格 勾选  a 全选  n 全不选  / 搜索  回车 打开（未勾选时只开当前行）  q 退出"
+HELP = "↑↓ 移动  空格 勾选  a 全选  n 全不选  / 搜索（含对话内容）  回车 打开（未勾选时只开当前行）  q 退出"
 
 
 def parse_choice(s, n):
@@ -268,7 +397,7 @@ def simple_picker(items):
     return [items[i] for i in parse_choice(s, len(items))]
 
 
-def curses_picker(stdscr, items):
+def curses_picker(stdscr, items, texts):
     import curses
     curses.curs_set(0)
     try:
@@ -285,8 +414,17 @@ def curses_picker(stdscr, items):
     cur, top, query, searching = 0, 0, "", False
 
     while True:
-        vis = [i for i, it in enumerate(items)
-               if query.lower() in (it["cwd"] + " " + it["title"] + " " + it["tool"]).lower()]
+        terms = query.lower().split()
+        vis, snips = [], {}
+        for i, it in enumerate(items):
+            meta = (it["cwd"] + " " + it["title"] + " " + it["tool"]).lower()
+            if all(t in meta for t in terms):
+                vis.append(i)
+            elif terms:
+                s = content_match(texts.get(it["path"], []), terms)
+                if s is not None:
+                    vis.append(i)
+                    snips[i] = s
         cur = max(0, min(cur, len(vis) - 1))
         h, w = stdscr.getmaxyx()
         rows = max(1, h - 5)
@@ -312,7 +450,7 @@ def curses_picker(stdscr, items):
                 stdscr.addstr(y, 0, left[:2], (CYAN | curses.A_BOLD) if on_cur else 0)
                 stdscr.addstr(y, 2, box, GREEN if idx in checked else GREY)
                 stdscr.addstr(y, 3, left[3:], attr | (YELLOW if it["tool"] == "codex" and not it["running"] else 0))
-                stdscr.addstr(fit(it["title"] or "（无标题）", title_w), attr)
+                stdscr.addstr(fit(snips.get(idx) or it["title"] or "（无标题）", title_w), attr)
                 stdscr.addstr(right, GREY)
             except curses.error:
                 pass
@@ -361,7 +499,12 @@ def pick(items):
         return simple_picker(items)
     locale.setlocale(locale.LC_ALL, "")
     os.environ.setdefault("ESCDELAY", "25")
-    return curses.wrapper(curses_picker, items)
+    try:
+        index = load_index([it["path"] for it in items])
+    except Exception:  # 搜索缓存出问题时，只搜目录和标题
+        index = {}
+    texts = {p: e["texts"] for p, e in index.items()}
+    return curses.wrapper(curses_picker, items, texts)
 
 
 # ---------- 打开终端 tab ----------
@@ -870,11 +1013,14 @@ def uninstall():
 
 COMMANDS = {"setup": "安装 Claude Code 状态钩子和 iTerm2 后台脚本（布局快照 + tab 状态）",
             "uninstall": "移除 setup 安装的内容",
+            "search": "按对话内容搜索全部历史会话，如 restore-ai-tabs search Redis 限流",
             "hook": "（供 Claude Code 钩子调用）"}
 
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "search":
+        argv = ["--search"] + argv[1:]
     if argv and argv[0] in COMMANDS:
         {"setup": setup, "uninstall": uninstall, "hook": hook}[argv[0]]()
         return
@@ -884,7 +1030,8 @@ def main(argv=None):
         description="一键把最近的 Claude Code / Codex 会话恢复成终端 tab",
         epilog="子命令：\n" + "\n".join("  %-10s %s" % kv for kv in COMMANDS.items() if kv[0] != "hook"),
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("-H", "--hours", type=float, default=6, help="查看最近多少小时的会话（默认 6）")
+    ap.add_argument("-H", "--hours", type=float, help="查看最近多少小时的会话（默认 6；搜索时默认不限）")
+    ap.add_argument("-s", "--search", nargs="+", metavar="关键词", help="按对话内容搜索，多个关键词需同时出现")
     ap.add_argument("--all", action="store_true", help="不询问，恢复所有没在运行的会话")
     ap.add_argument("--list", action="store_true", help="只列出会话，不打开")
     ap.add_argument("--dry-run", action="store_true", help="打印将要执行的命令，不打开")
@@ -908,7 +1055,7 @@ def main(argv=None):
             pass  # 提醒失败不能影响正常开 shell
         return
 
-    if IS_MAC and not (args.sessions or args.list or args.all):
+    if IS_MAC and not (args.sessions or args.list or args.all or args.search):
         snap = previous_snapshot(include_consumed=args.layout)
         if args.layout and not snap:
             sys.exit("没有找到布局快照：先运行 restore-ai-tabs setup，之后的布局才会被记录。")
@@ -924,10 +1071,20 @@ def main(argv=None):
             if key.lower() != "s":
                 return
 
-    items = find_sessions(args.hours)
-    if not items:
-        print("最近 %g 小时没有 Claude / Codex 会话，可以用 -H 24 看更久的。" % args.hours)
-        return
+    if args.search:
+        query = " ".join(args.search)
+        if not os.path.exists(INDEX_FILE):
+            print("第一次搜索，正在建立搜索缓存（只需几秒）…", file=sys.stderr)
+        items = search_sessions(query, args.hours)
+        if not items:
+            print("没有找到包含「%s」的会话。" % query)
+            return
+    else:
+        args.hours = args.hours or 6
+        items = find_sessions(args.hours)
+        if not items:
+            print("最近 %g 小时没有 Claude / Codex 会话，可以用 -H 24 看更久的。" % args.hours)
+            return
     mark_running(items)
 
     if args.list:

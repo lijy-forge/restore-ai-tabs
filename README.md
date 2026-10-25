@@ -36,6 +36,7 @@ Windows Terminal、iTerm2 自带的"恢复窗口"只恢复布局和目录，不�
 - **自动识别"正在运行"的会话**：已经开着的会话标灰，避免同一个会话开两份。
 - **Claude Code 和 Codex 一起恢复**：按最近活动时间排序，显示目录和你的第一句话，一眼就能认出是哪个。
 - **加到当前窗口**：新开的 tab 名自动设为项目目录名。
+- **按对话内容搜索**：`restore-ai-tabs search Redis 限流`，在所有历史会话里找"那个聊过 Redis 限流的会话"，勾选后直接恢复。
 - **启动时自动提醒**：终端重新打开时，如果有中断的会话，会问你要不要恢复，不用记命令。
 - **进阶（macOS + iTerm2）**：精确还原死机前的窗口、tab 和分屏布局；左侧 tab 栏实时显示每个 Agent 的状态：🔵 运行中、🟡 等你确认、✅ 已完成。
 - **单文件、几乎零依赖**：macOS 上只用系统自带的 Python；Windows 只多一个 `windows-curses`，用于复选框界面。
@@ -70,14 +71,26 @@ restore-ai-tabs --all        # 不询问，恢复所有没在运行的会话
 restore-ai-tabs --list       # 只列出
 restore-ai-tabs --dry-run    # 只打印将要执行的命令
 restore-ai-tabs --new-window # 在新窗口打开
+restore-ai-tabs search Redis 限流  # 按对话内容搜索全部历史会话，多个词需同时出现
 ```
+
+### 全文搜索
+
+`search` 会搜你说过的话和 AI 的回答（不含工具输出、文件内容），结果按时间排序，标题位置显示命中的那一句，勾选后照常恢复。可以加 `-H 72` 只搜最近 3 天，加 `--list` 只列出。复选框界面里按 `/` 搜索时，同样会搜对话内容。
+
+为了快，对话文字会缓存在 `~/.cache/restore-ai-tabs/search-index.json`：
+
+- 大小约等于对话文字本身（实测 68 个会话 ≈ 7MB，而原始记录有 590MB）
+- 第一次建立需要几秒，之后只读取新增的内容，每次搜索约 0.1 秒
+- 没有常驻进程，不搜索时不占内存；Claude Code 清理掉的会话，缓存里也会同步删除
+- 缓存是对话文字的明文副本，删掉也没关系，下次搜索会自动重建
 
 | 按键 | 作用 |
 |---|---|
 | `↑` `↓` / `j` `k` | 移动 |
 | `空格` | 勾选 / 取消 |
 | `a` / `n` | 全选 / 全不选（作用于当前搜索结果） |
-| `/` | 搜索目录或标题，`Esc` 清空 |
+| `/` | 搜索目录、标题和对话内容，`Esc` 清空 |
 | `回车` | 打开勾选的会话；一个都没勾时，只打开光标所在的那个 |
 | `q` | 退出 |
 
@@ -185,6 +198,7 @@ CI 会在 macOS、Windows、Ubuntu 上，分别用 Python 3.9 和 3.12 跑完整
 - [ ] 还原分屏比例（目前按平均分）
 - [ ] Windows Terminal 的布局恢复
 - [ ] 支持 Terminal.app、Warp、tmux
+- [x] 按对话内容全文搜索
 - [ ] 显示每个会话的最后一条消息作为预览
 - [ ] 支持更多 AI CLI（Gemini CLI、Aider……）
 
@@ -202,11 +216,12 @@ Terminal "restore windows" features bring back layouts but not the AI conversati
 pipx install git+https://github.com/lijy-forge/restore-ai-tabs
 restore-ai-tabs                              # pick sessions to restore
 restore-ai-tabs --print-hook zsh >> ~/.zshrc # prompt automatically after a crash
+restore-ai-tabs search redis rate limit      # full-text search over all past conversations
 ```
 
 On macOS + iTerm2, `restore-ai-tabs setup` adds an iTerm2 background script and Claude Code hooks: your exact window / tab / split layout is snapshotted on every change and rebuilt on the next launch, and each tab shows the agent's state (🔵 running, 🟡 needs approval, ✅ done) — a cmux-style sidebar when the tab bar is on the left.
 
-Flags: `-H/--hours`, `--all`, `--list`, `--dry-run`, `--new-window`, `--terminal`, `--layout`, `--sessions`, `--check`, `--print-hook`. Commands: `setup`, `uninstall`.
+Flags: `-H/--hours`, `-s/--search`, `--all`, `--list`, `--dry-run`, `--new-window`, `--terminal`, `--layout`, `--sessions`, `--check`, `--print-hook`. Commands: `setup`, `uninstall`, `search`.
 
 ## License
 
