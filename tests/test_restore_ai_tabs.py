@@ -122,7 +122,10 @@ class TerminalCommandTest(unittest.TestCase):
         rat.mark_running = fake
         try:
             items = [dict(tool="claude", id="a", cwd="/w/a"), dict(tool="claude", id="b", cwd="/w/b")]
-            self.assertEqual([it["id"] for it in rat.skip_running(items)], ["b"])
+            out = __import__("io").StringIO()
+            with __import__("contextlib").redirect_stdout(out):
+                self.assertEqual([it["id"] for it in rat.skip_running(items)], ["b"])
+            self.assertIn("跳过 1 个", out.getvalue())
         finally:
             rat.mark_running = saved
 
