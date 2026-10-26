@@ -114,6 +114,18 @@ class TerminalCommandTest(unittest.TestCase):
         self.assertEqual(args[-5:], ["cmd", "/k", "codex", "resume", "b"])
         self.assertEqual(rat.wt_args(items, new_window=True)[2], "new")
 
+    def test_skip_running_before_opening(self):
+        saved = rat.mark_running
+        def fake(items):
+            for it in items:
+                it["running"] = it["id"] == "a"
+        rat.mark_running = fake
+        try:
+            items = [dict(tool="claude", id="a", cwd="/w/a"), dict(tool="claude", id="b", cwd="/w/b")]
+            self.assertEqual([it["id"] for it in rat.skip_running(items)], ["b"])
+        finally:
+            rat.mark_running = saved
+
 
 class CliTest(unittest.TestCase):
     def run_cli(self, *args):
@@ -171,6 +183,15 @@ class LayoutTest(unittest.TestCase):
         script = rat.layout_script(SNAP, running_ids={"aaa"})
         self.assertIn('write text "cd /work/api"', script)
         self.assertNotIn("claude --resume aaa", script)
+
+    def test_duplicate_session_resumed_once(self):
+        snap = {"windows": [{"tabs": [
+            {"root": {"pane": {"cwd": "/work/api", "agent": {"tool": "claude", "id": "aaa", "cwd": "/work/api"}}}},
+            {"root": {"pane": {"cwd": "/work/api", "agent": {"tool": "claude", "id": "aaa", "cwd": "/work/api"}}}}]}]}
+        self.assertEqual(rat.layout_script(snap, running_ids=set()).count("claude --resume aaa"), 1)
+        lines = rat.layout_overview(snap, set(), {"aaa": "修登录"})
+        self.assertIn("「修登录」", lines[0])
+        self.assertIn("重复", lines[1])
 
 
 class StateTest(unittest.TestCase):

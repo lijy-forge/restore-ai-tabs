@@ -411,7 +411,7 @@ def curses_picker(stdscr, items, texts):
         CYAN = GREEN = YELLOW = GREY = 0
 
     checked = set()
-    cur, top, query, searching = 0, 0, "", False
+    cur, top, query, searching, flash = 0, 0, "", False, ""
 
     while True:
         terms = query.lower().split()
@@ -432,7 +432,9 @@ def curses_picker(stdscr, items, texts):
 
         stdscr.erase()
         stdscr.addnstr(0, 0, "恢复 AI 会话 · 已选 %d / %d" % (len(checked), len(items)), w - 1, curses.A_BOLD)
-        stdscr.addnstr(1, 0, ("搜索: " + query + "▏") if searching or query else HELP, w - 1, GREY)
+        line1 = ("搜索: " + query + "▏") if searching or query else flash or HELP
+        stdscr.addnstr(1, 0, line1, w - 1, YELLOW if flash and not (searching or query) else GREY)
+        flash = ""
 
         cwd_w = min(34, max(12, w // 3))
         for row, idx in enumerate(vis[top:top + rows]):
@@ -474,9 +476,12 @@ def curses_picker(stdscr, items, texts):
         elif k in (curses.KEY_DOWN, "j"):
             cur = min(len(vis) - 1, cur + 1)
         elif k == " " and vis:
-            checked ^= {vis[cur]}
+            if items[vis[cur]]["running"]:
+                flash = "这个会话已经开着了，不会重复打开"
+            else:
+                checked ^= {vis[cur]}
         elif k == "a":
-            checked |= set(vis)
+            checked |= {i for i in vis if not items[i]["running"]}
         elif k == "n":
             checked -= set(vis)
         elif k == "/":
@@ -484,6 +489,9 @@ def curses_picker(stdscr, items, texts):
         elif k in ("\n", "\r", curses.KEY_ENTER):
             # 没勾选任何会话时，回车只打开光标所在的那一个
             if not checked:
+                if vis and items[vis[cur]]["running"]:
+                    flash = "这个会话已经开着了，不会重复打开"
+                    continue
                 return [items[vis[cur]]] if vis else []
             return [items[i] for i in sorted(checked)]
         elif k in ("q", "\x1b"):
@@ -568,7 +576,20 @@ def wt_args(items, new_window):
     return args
 
 
+def skip_running(items):
+    """打开前再确认一次：选择期间可能已经在别的 tab 里打开了。"""
+    mark_running(items)
+    running = [it for it in items if it["running"]]
+    if running:
+        print("跳过 %d 个已经开着的会话：%s" % (len(running), "、".join(tab_title(it) for it in running)))
+    return [it for it in items if not it["running"]]
+
+
 def open_tabs(items, terminal, new_window):
+    """返回实际打开的 tab 数。"""
+    items = skip_running(items)
+    if not items:
+        return 0
     if terminal == "iterm":
         subprocess.run(["osascript", "-e", iterm_script(items, new_window)], check=True)
     elif terminal == "wt":
@@ -581,8 +602,8 @@ def open_tabs(items, terminal, new_window):
         print("当前终端不支持自动开 tab，请在新 tab 里分别运行：\n")
         for it in items:
             print("  " + posix_command(it))
-        return False
-    return True
+        return 0
+    return len(items)
 
 
 def show_commands(items):
@@ -660,8 +681,9 @@ def check():
             items = find_sessions(24)
             mark_running(items)
             chosen = pick(items) if items else []
-            if chosen and open_tabs(chosen, detect_terminal(), new_window=False):
-                print("已打开 %d 个 tab。" % len(chosen))
+            n = open_tabs(chosen, detect_terminal(), new_window=False) if chosen else 0
+            if n:
+                print("已打开 %d 个 tab。" % n)
         return
     items = find_sessions(CHECK_HOURS)
     if not items:
@@ -675,8 +697,9 @@ def check():
     if read_key() not in ("\n", "\r"):
         return
     chosen = pick(items)
-    if chosen and open_tabs(chosen, detect_terminal(), new_window=False):
-        print("已打开 %d 个 tab。" % len(chosen))
+    n = open_tabs(chosen, detect_terminal(), new_window=False) if chosen else 0
+    if n:
+        print("已打开 %d 个 tab。" % n)
 
 
 # ---------- 运行中的 AI 会话 → 所在终端 ----------
@@ -816,6 +839,7 @@ def layout_script(snap, running_ids):
     """按快照重建窗口 / tab / 分屏，并在每个窗格里恢复会话。分屏比例按平均分。"""
     lines = ['tell application "iTerm"', "activate"]
     counter = [0]
+    resumed = set(running_ids)  # 同一个会话在快照里出现多次时，只恢复第一个
 
     def new_var():
         counter[0] += 1
@@ -823,7 +847,9 @@ def layout_script(snap, running_ids):
 
     def build(node, var):
         if "pane" in node:
-            lines.append("tell %s to write text %s" % (var, as_applescript(pane_command(node["pane"], running_ids))))
+            lines.append("tell %s to write text %s" % (var, as_applescript(pane_command(node["pane"], resumed))))
+            if node["pane"].get("agent"):
+                resumed.add(node["pane"]["agent"]["id"])
             return
         verb = "vertically" if node["split"] == "vertical" else "horizontally"
         vars_ = [var]
@@ -850,13 +876,21 @@ def layout_script(snap, running_ids):
 
 def describe_layout(snap, running_ids):
     out = []
+    seen = set(running_ids)
 
     def walk(node, depth):
         pad = "    " * depth
         if "pane" in node:
             p = node["pane"]
             a = p.get("agent")
-            tag = ("%s %s" % (a["tool"], "（已在运行，只进入目录）" if a["id"] in running_ids else "resume")) if a else "终端"
+            if not a:
+                tag = "终端"
+            elif a["id"] in seen:
+                tag = "%s %s" % (a["tool"], "（已在运行，只进入目录）" if a["id"] in running_ids else "（重复，只进入目录）")
+            else:
+                tag = a["tool"] + " resume"
+            if a:
+                seen.add(a["id"])
             out.append("%s- [%s] %s" % (pad, tag, short_cwd(p.get("cwd") or "~")))
         else:
             out.append("%s%s分屏:" % (pad, "左右" if node["split"] == "vertical" else "上下"))
@@ -882,12 +916,46 @@ def restore_layout(snap, dry_run=False):
     print("已按原布局恢复 %d 个窗口、%d 个 tab、%d 个窗格（%d 个 AI 会话）。" % (w, t, p, a))
 
 
+def layout_overview(snap, running_ids, titles, cols=100):
+    """每个 tab 一行：里面每个窗格是哪个会话（目录 + 第一句话），分屏用 │ 隔开。"""
+    shown = set(running_ids)
+
+    def pane_text(p):
+        a = p.get("agent")
+        name = os.path.basename((p.get("cwd") or "~").rstrip("/")) or "/"
+        if not a:
+            return "终端 " + name
+        text = "%s %s" % (a["tool"], name)
+        if titles.get(a["id"]):
+            text += "「%s」" % titles[a["id"]]
+        if a["id"] in shown:
+            text += "（已开着）" if a["id"] in running_ids else "（重复，只进目录）"
+        shown.add(a["id"])
+        return text
+
+    lines = []
+    for wi, win in enumerate(snap["windows"], 1):
+        if len(snap["windows"]) > 1:
+            lines.append("  窗口 %d" % wi)
+        for ti, tab in enumerate(win["tabs"], 1):
+            panes = list(iter_panes(tab["root"]))
+            each = max(16, (cols - 8) // len(panes) - 3)
+            parts = [fit(pane_text(p), each).rstrip() for p in panes]
+            lines.append(fit("  %2d  %s" % (ti, " │ ".join(parts)), cols - 1).rstrip())
+    return lines
+
+
 def layout_prompt(snap):
     w, t, p, a = snapshot_stats(snap)
     age = ago(snap.get("saved_at", time.time()))
-    print("\033[36m⟲ 上次 iTerm 关闭前（%s）有 %d 个窗口、%d 个 tab、%d 个窗格，其中 %d 个 AI 会话。\033[0m"
+    running_ids = {x["id"] for x in agents_by_tty().values()}
+    titles = {it["id"]: it["title"] for it in find_sessions(24 * 60)}
+    cols = shutil.get_terminal_size((100, 24)).columns
+    print("\033[36m⟲ 上次 iTerm 关闭前（%s）有 %d 个窗口、%d 个 tab、%d 个窗格，其中 %d 个 AI 会话：\033[0m"
           % (age, w, t, p, a))
-    print("回车 = 按原布局恢复，s = 逐个选择会话，其他键 = 跳过")
+    for line in layout_overview(snap, running_ids, titles, cols):
+        print(line)
+    print("\n回车 = 按原布局全部恢复，s = 逐个选择会话，其他键 = 跳过")
     return read_key()
 
 
@@ -1138,8 +1206,9 @@ def main(argv=None):
         show_commands(chosen)
         return
     terminal = detect_terminal() if args.terminal == "auto" else args.terminal
-    if open_tabs(chosen, terminal, args.new_window):
-        print("已打开 %d 个 tab。" % len(chosen))
+    n = open_tabs(chosen, terminal, args.new_window)
+    if n:
+        print("已打开 %d 个 tab。" % n)
 
 
 if __name__ == "__main__":
